@@ -6,31 +6,20 @@ A student-focused EMS-style study portal for your GMAT content.
 
 - Renders your day-wise plan from `data/day-plan.json`.
 - Tracks task completion in browser local storage.
-- Indexes your Google Drive course folder recursively via secure server-side proxy.
-- Auto-maps day-plan file references to real Drive links.
-- Works best on Vercel (proxy-enabled).
+- Uses static public link map from `data/public-links.json`.
+- Auto-maps day-plan file references to direct public Drive links.
+- Works on any static host (GitHub Pages, Vercel, local server).
 
 ## Files
 
 - `index.html`: app shell
 - `styles.css`: UI styling
-- `app.js`: planner + Drive integration logic
+- `app.js`: planner + static link integration logic
 - `config.js`: app config (folder ID)
-- `api/drive-list.js`: secure Drive proxy endpoint (Vercel serverless)
 - `data/day-plan.json`: day-wise schedule source
 - `data/public-links.json`: direct public Drive link map
 - `scripts/build_day_plan.py`: regenerate JSON from planner markdown
-- `scripts/build_public_links.py`: regenerate public link map from Drive
-
-## Google Drive Setup (Secure)
-
-1. Keep your Drive folder shared as `Anyone with link -> Viewer`.
-2. Create a Google API key (Google Cloud Console):
-   - Enable `Google Drive API`
-   - Create API key
-3. In Vercel Project Settings -> Environment Variables, add:
-   - `GOOGLE_DRIVE_API_KEY=<your_key>`
-4. Redeploy.
+- `scripts/build_public_links.py`: regenerate public link map from Drive (optional)
 
 Configured folder ID:
 - `11GTSMZQlZctn6XXfKf1J7mOicJQkN_bx`
@@ -45,7 +34,7 @@ python3 -m http.server 8080
 Open:
 - `http://localhost:8080`
 
-Note: local static server won't expose `/api/drive-list`. The planner still loads, but live Drive sync requires Vercel deployment.
+Note: this app is static-only now, so local static serving works fully.
 For direct file-open mode, open:
 - `/Users/pulkit/Downloads/Stellar/ems-portal/index.html`
 
@@ -54,8 +43,7 @@ For direct file-open mode, open:
 1. Import this `ems-portal` folder as a project.
 2. Framework preset: `Other` (static).
 3. Output directory: `.`
-4. Add env var `GOOGLE_DRIVE_API_KEY`.
-5. Deploy.
+4. Deploy.
 
 The repo already includes `vercel.json` tuned for this portal.
 
@@ -67,7 +55,7 @@ The repo already includes `vercel.json` tuned for this portal.
 
 `ems-portal/.nojekyll` is already included.
 
-Note: GitHub Pages alone cannot run the secure proxy endpoint.
+Note: GitHub Pages works directly because this is now static-only.
 
 ## Regenerate Day Plan JSON
 

@@ -1,18 +1,12 @@
 const CONFIG = window.EMS_CONFIG || {};
 const STORAGE_KEY_DONE = "stellar_ems_done_v1";
-const IS_LOCAL_RUNTIME =
-  window.location.protocol === "file:" ||
-  window.location.hostname === "localhost" ||
-  window.location.hostname === "127.0.0.1";
 
 const state = {
   dayPlan: null,
   done: new Set(JSON.parse(localStorage.getItem(STORAGE_KEY_DONE) || "[]")),
-  driveFiles: [],
+  staticFiles: [],
   publicByPath: new Map(),
   publicByName: new Map(),
-  urlByPath: new Map(),
-  urlByBase: new Map(),
   activeTab: "today",
 };
 
@@ -28,7 +22,7 @@ const el = {
   libraryTab: document.getElementById("tab-library"),
   menuTabs: document.getElementById("menuTabs"),
   folderIdText: document.getElementById("folderIdText"),
-  syncDriveBtn: document.getElementById("syncDriveBtn"),
+  reloadLinksBtn: document.getElementById("syncDriveBtn"),
 };
 
 function setStatus(message, isError = false) {
@@ -373,10 +367,10 @@ function renderLibrary() {
   title.textContent = "Drive Resource Library";
   card.appendChild(title);
 
-  if (!state.driveFiles.length) {
+  if (!state.staticFiles.length) {
     const p = document.createElement("p");
     p.className = "note-line";
-    p.textContent = "No Drive index loaded yet. Click Sync From Drive.";
+    p.textContent = "No static link index loaded yet. Click Reload Links.";
     card.appendChild(p);
     el.libraryTab.appendChild(card);
     return;
@@ -416,7 +410,7 @@ function renderLibrary() {
     const q = normalize(search.value);
     const t = typeFilter.value;
 
-    state.driveFiles.forEach((f) => {
+    state.staticFiles.forEach((f) => {
       const ext = (f.name.split(".").pop() || "other").toLowerCase();
       const tpe = ["mp4", "pdf"].includes(ext) ? ext : "other";
       const matchText = normalize(`${f.name} ${f.relativePath}`);
@@ -466,75 +460,10 @@ async function fetchPublicLinks() {
   }
 }
 
-async function listFolderChildren(folderId, pageToken = "") {
-  const url = new URL("/api/drive-list", window.location.origin);
-  url.searchParams.set("folderId", folderId);
-  if (pageToken) url.searchParams.set("pageToken", pageToken);
-
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Drive sync failed (${res.status}): ${txt.slice(0, 220)}`);
-  }
-  return res.json();
-}
-
-function fileUrlForGoogle(file) {
-  const mt = file.mimeType || "";
-  if (mt === "application/vnd.google-apps.document") return `https://docs.google.com/document/d/${file.id}/edit`;
-  if (mt === "application/vnd.google-apps.spreadsheet") return `https://docs.google.com/spreadsheets/d/${file.id}/edit`;
-  if (mt === "application/vnd.google-apps.presentation") return `https://docs.google.com/presentation/d/${file.id}/edit`;
-  if (file.webViewLink) return file.webViewLink;
-  return `https://drive.google.com/file/d/${file.id}/view`;
-}
-
-async function indexDrive(folderId) {
-  const FOLDER_MIME = "application/vnd.google-apps.folder";
-  const queue = [{ id: folderId, path: [] }];
-  const files = [];
-
-  while (queue.length) {
-    const current = queue.shift();
-    let pageToken = "";
-
-    do {
-      const payload = await listFolderChildren(current.id, pageToken);
-      for (const file of payload.files || []) {
-        if (file.mimeType === FOLDER_MIME) {
-          queue.push({ id: file.id, path: [...current.path, file.name] });
-        } else {
-          const relativePath = [...current.path, file.name].join("/");
-          files.push({
-            id: file.id,
-            name: file.name,
-            mimeType: file.mimeType,
-            relativePath,
-            path: [...current.path],
-            url: fileUrlForGoogle(file),
-          });
-        }
-      }
-      pageToken = payload.nextPageToken || "";
-    } while (pageToken);
-  }
-
-  return files;
-}
-
-function buildIndexes() {
-  state.urlByPath.clear();
-  state.urlByBase.clear();
-
-  state.driveFiles.forEach((f) => {
-    state.urlByPath.set(normalize(f.relativePath), f.url);
-    const b = normalize(f.name);
-    if (!state.urlByBase.has(b)) state.urlByBase.set(b, f.url);
-  });
-}
-
 function buildPublicIndexes(payload) {
   state.publicByPath.clear();
   state.publicByName.clear();
+  state.staticFiles = [];
 
   if (!payload) return;
 
@@ -542,30 +471,40 @@ function buildPublicIndexes(payload) {
   const byName = payload.byName || {};
 
   Object.entries(byPath).forEach(([k, v]) => {
-    state.publicByPath.set(normalize(k), v);
+    const normalizedPath = normalize(k);
+    const fileName = basename(k);
+    const normalizedName = normalize(fileName);
+
+    state.publicByPath.set(normalizedPath, v);
+    if (!state.publicByName.has(normalizedName)) {
+      state.publicByName.set(normalizedName, v);
+    }
+
+    if (!fileName || fileName.startsWith(".")) return;
+    state.staticFiles.push({
+      name: fileName,
+      relativePath: k,
+      url: v,
+    });
   });
 
   Object.entries(byName).forEach(([k, v]) => {
-    state.publicByName.set(normalize(k), v);
+    const normalizedName = normalize(k);
+    if (!state.publicByName.has(normalizedName)) {
+      state.publicByName.set(normalizedName, v);
+    }
   });
+
+  state.staticFiles.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
 function resolveFileUrl(ref) {
   if (!ref) return null;
   const p = normalize(ref);
   if (state.publicByPath.has(p)) return state.publicByPath.get(p);
-  if (state.urlByPath.has(p)) return state.urlByPath.get(p);
 
   const b = normalize(basename(ref));
   if (state.publicByName.has(b)) return state.publicByName.get(b);
-  if (state.urlByBase.has(b)) return state.urlByBase.get(b);
-
-  if (IS_LOCAL_RUNTIME) {
-    const raw = String(ref);
-    if (raw.startsWith("/")) return encodeURI(`file://${raw}`);
-    const base = CONFIG?.local?.basePath;
-    if (base) return encodeURI(`file://${base.replace(/\/$/, "")}/${raw.replace(/^\/+/, "")}`);
-  }
 
   return null;
 }
@@ -578,35 +517,12 @@ function refreshAllViews() {
 }
 
 async function syncDrive() {
-  if (IS_LOCAL_RUNTIME) {
-    setStatus("Local mode active: using local file links. Drive sync via proxy is disabled locally.");
-    state.driveFiles = [];
-    buildIndexes();
-    refreshAllViews();
-    return;
-  }
-
-  if (!CONFIG?.drive?.folderId) {
-    setStatus("Missing Drive folder ID in config.js.", true);
-    state.driveFiles = [];
-    buildIndexes();
-    refreshAllViews();
-    return;
-  }
-
-  setStatus("Syncing from Google Drive via secure proxy...");
   try {
-    const files = await indexDrive(CONFIG.drive.folderId);
-    state.driveFiles = files;
-    buildIndexes();
-    setStatus(`Drive sync complete: ${files.length} files indexed.`);
+    const publicLinks = await fetchPublicLinks();
+    buildPublicIndexes(publicLinks);
+    setStatus(`Loaded ${state.staticFiles.length} static public links.`);
   } catch (err) {
-    const msg = err.message || "Drive sync failed.";
-    if (msg.includes("404")) {
-      setStatus("Drive proxy endpoint not found. Deploy on Vercel and ensure /api/drive-list is available.", true);
-    } else {
-      setStatus(msg, true);
-    }
+    setStatus(err.message || "Failed to load static public links.", true);
   }
 
   refreshAllViews();
@@ -632,7 +548,9 @@ async function init() {
   wireTabs();
 
   el.folderIdText.textContent = CONFIG?.drive?.folderId || "(missing)";
-  el.syncDriveBtn.addEventListener("click", syncDrive);
+  if (el.reloadLinksBtn) {
+    el.reloadLinksBtn.addEventListener("click", syncDrive);
+  }
 
   try {
     state.dayPlan = await fetchDayPlan();
@@ -640,22 +558,7 @@ async function init() {
     setStatus(err.message || "Could not load planner data.", true);
     return;
   }
-
-  try {
-    const publicLinks = await fetchPublicLinks();
-    buildPublicIndexes(publicLinks);
-    if (publicLinks?.count) {
-      setStatus(`Loaded ${publicLinks.count} public Drive links.`);
-    }
-  } catch (_err) {
-    // Ignore; proxy sync can still provide links.
-  }
-
-  if (!IS_LOCAL_RUNTIME) {
-    await syncDrive();
-  } else {
-    refreshAllViews();
-  }
+  await syncDrive();
 }
 
 init();

@@ -8,7 +8,7 @@ import urllib.request
 from collections import defaultdict
 
 FOLDER_ID = os.environ.get("EMS_DRIVE_FOLDER_ID", "11GTSMZQlZctn6XXfKf1J7mOicJQkN_bx")
-API_KEY = os.environ.get("EMS_DRIVE_API_KEY", "AIzaSyDvNMzFOW6KEr1QWoQz3LmRnNgqD6OhbP4")
+API_KEY = os.environ.get("EMS_DRIVE_API_KEY", "")
 OUT = "/Users/pulkit/Downloads/Stellar/ems-portal/data/public-links.json"
 OUT_INLINE = "/Users/pulkit/Downloads/Stellar/ems-portal/data/public-links-inline.js"
 
@@ -71,7 +71,7 @@ def crawl(folder_id: str):
 
 def main():
     if not API_KEY:
-        print("Missing API key", file=sys.stderr)
+        print("Missing EMS_DRIVE_API_KEY (needed only to regenerate public-links.json)", file=sys.stderr)
         sys.exit(1)
 
     files = crawl(FOLDER_ID)
