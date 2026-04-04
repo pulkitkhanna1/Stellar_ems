@@ -72,10 +72,22 @@ function taskKey(date, title) {
   return `${date}::${title}`;
 }
 
+function getStartDate() {
+  return CONFIG?.startDate || state.dayPlan?.start_date || "";
+}
+
+function isOnOrAfter(dateStr, floorDate) {
+  if (!floorDate) return true;
+  return String(dateStr) >= String(floorDate);
+}
+
 function allTaskRows() {
   if (!state.dayPlan?.days) return [];
+  const startDate = getStartDate();
   const rows = [];
   for (const day of state.dayPlan.days) {
+    if (!isOnOrAfter(day.date, startDate)) continue;
+
     rows.push({
       date: day.date,
       title: day.core || "Core task",
@@ -186,8 +198,17 @@ function renderTaskBlock(container, row) {
 function renderToday() {
   el.todayTab.innerHTML = "";
 
+  const startDate = getStartDate();
   const today = todayInTZ(CONFIG.timezone || "Asia/Kolkata");
-  const day = state.dayPlan.days.find((d) => d.date === today) || state.dayPlan.days[0];
+  const eligibleDays = state.dayPlan.days.filter((d) => isOnOrAfter(d.date, startDate));
+  const day =
+    eligibleDays.find((d) => d.date === today) ||
+    eligibleDays[0] ||
+    state.dayPlan.days[0];
+
+  const backlogRows = allTaskRows()
+    .filter((r) => r.date < day.date && !state.done.has(taskKey(r.date, r.title)))
+    .sort((a, b) => (a.date === b.date ? 0 : a.date > b.date ? -1 : 1));
 
   const wrapper = document.createElement("div");
   wrapper.className = "grid-2";
@@ -197,6 +218,23 @@ function renderToday() {
   const h = document.createElement("h3");
   h.textContent = `${day.date} (${day.weekday})`;
   left.appendChild(h);
+
+  if (backlogRows.length) {
+    const sub = document.createElement("h4");
+    sub.textContent = `Backlog Stack (${backlogRows.length})`;
+    sub.style.margin = "0 0 8px";
+    left.appendChild(sub);
+
+    const backlogList = document.createElement("div");
+    backlogList.className = "task-list";
+    backlogRows.forEach((r) => renderTaskBlock(backlogList, r));
+    left.appendChild(backlogList);
+  }
+
+  const todaySub = document.createElement("h4");
+  todaySub.textContent = "Today Plan";
+  todaySub.style.margin = "12px 0 8px";
+  left.appendChild(todaySub);
 
   const taskList = document.createElement("div");
   taskList.className = "task-list";
@@ -242,8 +280,13 @@ function renderToday() {
   wrapper.appendChild(right);
   el.todayTab.appendChild(wrapper);
 
-  el.heroTitle.textContent = `Today: ${day.core}`;
-  el.heroSub.textContent = `Stay consistent. Finish core + tests + review loop.`;
+  if (backlogRows.length) {
+    el.heroTitle.textContent = `Backlog ${backlogRows.length} + Today: ${day.core}`;
+    el.heroSub.textContent = `Clear the backlog stack first, then complete today's core flow.`;
+  } else {
+    el.heroTitle.textContent = `Today: ${day.core}`;
+    el.heroSub.textContent = `Stay consistent. Finish core + tests + review loop.`;
+  }
 }
 
 function renderPlanner() {
