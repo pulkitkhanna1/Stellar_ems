@@ -692,7 +692,9 @@ async function init() {
   wireTabs();
   applyProgressConfig();
 
-  el.folderIdText.textContent = CONFIG?.drive?.folderId || "(missing)";
+  if (el.folderIdText) {
+    el.folderIdText.textContent = CONFIG?.drive?.folderId || "(missing)";
+  }
   if (el.reloadLinksBtn) {
     el.reloadLinksBtn.addEventListener("click", syncDrive);
   }
