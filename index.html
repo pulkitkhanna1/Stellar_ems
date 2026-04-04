@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stellar Student EMS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb bg-orb-a"></div>
+    <div class="bg-orb bg-orb-b"></div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div>
+            <h1>Stellar EMS</h1>
+            <p>Student Command Center</p>
+          </div>
+        </div>
+
+        <nav class="menu" id="menuTabs">
+          <button data-tab="today" class="menu-item active">Today</button>
+          <button data-tab="planner" class="menu-item">Day-Wise Plan</button>
+          <button data-tab="library" class="menu-item">Resource Library</button>
+        </nav>
+
+        <div class="sidebar-card">
+          <p class="muted">Drive Folder</p>
+          <p id="folderIdText" class="mono"></p>
+          <label class="label" for="apiKeyInput">Google API Key</label>
+          <input id="apiKeyInput" type="password" placeholder="Paste API key" />
+          <button id="saveApiKeyBtn" class="btn btn-primary">Save & Sync</button>
+          <p class="hint">Needed only for live Drive fetch.</p>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Focus Mode</p>
+            <h2 id="heroTitle">Loading your study command center...</h2>
+            <p id="heroSub" class="hero-sub"></p>
+          </div>
+          <div class="hero-stats">
+            <div class="stat-card">
+              <p>Completion</p>
+              <h3 id="completionPct">0%</h3>
+            </div>
+            <div class="stat-card">
+              <p>Completed Tasks</p>
+              <h3 id="completedCount">0</h3>
+            </div>
+            <div class="stat-card">
+              <p>Drive Links Mapped</p>
+              <h3 id="mappedCount">0</h3>
+            </div>
+          </div>
+        </header>
+
+        <section id="statusBar" class="status"></section>
+
+        <section id="tab-today" class="tab-panel"></section>
+        <section id="tab-planner" class="tab-panel hidden"></section>
+        <section id="tab-library" class="tab-panel hidden"></section>
+      </main>
+    </div>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
