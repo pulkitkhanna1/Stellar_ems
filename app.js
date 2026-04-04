@@ -9,6 +9,8 @@ const state = {
   dayPlan: null,
   done: new Set(JSON.parse(localStorage.getItem(STORAGE_KEY_DONE) || "[]")),
   driveFiles: [],
+  publicByPath: new Map(),
+  publicByName: new Map(),
   urlByPath: new Map(),
   urlByBase: new Map(),
   activeTab: "today",
@@ -408,6 +410,19 @@ async function fetchDayPlan() {
   }
 }
 
+async function fetchPublicLinks() {
+  try {
+    const res = await fetch("./data/public-links.json", { cache: "no-cache" });
+    if (!res.ok) throw new Error("Failed to load public-links.json");
+    return res.json();
+  } catch (err) {
+    if (window.__PUBLIC_LINKS_INLINE?.byRelativePath || window.__PUBLIC_LINKS_INLINE?.byName) {
+      return window.__PUBLIC_LINKS_INLINE;
+    }
+    throw err;
+  }
+}
+
 async function listFolderChildren(folderId, pageToken = "") {
   const url = new URL("/api/drive-list", window.location.origin);
   url.searchParams.set("folderId", folderId);
@@ -474,12 +489,32 @@ function buildIndexes() {
   });
 }
 
+function buildPublicIndexes(payload) {
+  state.publicByPath.clear();
+  state.publicByName.clear();
+
+  if (!payload) return;
+
+  const byPath = payload.byRelativePath || {};
+  const byName = payload.byName || {};
+
+  Object.entries(byPath).forEach(([k, v]) => {
+    state.publicByPath.set(normalize(k), v);
+  });
+
+  Object.entries(byName).forEach(([k, v]) => {
+    state.publicByName.set(normalize(k), v);
+  });
+}
+
 function resolveFileUrl(ref) {
   if (!ref) return null;
   const p = normalize(ref);
+  if (state.publicByPath.has(p)) return state.publicByPath.get(p);
   if (state.urlByPath.has(p)) return state.urlByPath.get(p);
 
   const b = normalize(basename(ref));
+  if (state.publicByName.has(b)) return state.publicByName.get(b);
   if (state.urlByBase.has(b)) return state.urlByBase.get(b);
 
   if (IS_LOCAL_RUNTIME) {
@@ -561,6 +596,16 @@ async function init() {
   } catch (err) {
     setStatus(err.message || "Could not load planner data.", true);
     return;
+  }
+
+  try {
+    const publicLinks = await fetchPublicLinks();
+    buildPublicIndexes(publicLinks);
+    if (publicLinks?.count) {
+      setStatus(`Loaded ${publicLinks.count} public Drive links.`);
+    }
+  } catch (_err) {
+    // Ignore; proxy sync can still provide links.
   }
 
   if (!IS_LOCAL_RUNTIME) {

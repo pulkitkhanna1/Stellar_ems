@@ -18,7 +18,9 @@ A student-focused EMS-style study portal for your GMAT content.
 - `config.js`: app config (folder ID)
 - `api/drive-list.js`: secure Drive proxy endpoint (Vercel serverless)
 - `data/day-plan.json`: day-wise schedule source
+- `data/public-links.json`: direct public Drive link map
 - `scripts/build_day_plan.py`: regenerate JSON from planner markdown
+- `scripts/build_public_links.py`: regenerate public link map from Drive
 
 ## Google Drive Setup (Secure)
 
@@ -73,4 +75,10 @@ After planner edits:
 
 ```bash
 python3 scripts/build_day_plan.py
+```
+
+## Regenerate Direct Public Links
+
+```bash
+python3 scripts/build_public_links.py
 ```

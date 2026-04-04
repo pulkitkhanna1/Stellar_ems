@@ -14,6 +14,7 @@ Notes:
 - `vercel.json` is already configured.
 - `data/day-plan.json` is served with `Cache-Control: no-store` for quick schedule updates.
 - Secure proxy endpoint: `/api/drive-list`.
+- Direct public hyperlinks are preloaded from `data/public-links.json`.
 
 ## GitHub Pages
 
@@ -37,4 +38,11 @@ If planner markdown changes:
 ```bash
 cd ems-portal
 python3 scripts/build_day_plan.py
+```
+
+If Drive file inventory changes, refresh direct hyperlink map:
+
+```bash
+cd ems-portal
+python3 scripts/build_public_links.py
 ```
