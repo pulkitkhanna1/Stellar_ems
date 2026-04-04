@@ -5,13 +5,18 @@
 1. Open Vercel dashboard and create/import project from your repo.
 2. Set project root to `ems-portal`.
 3. Framework preset: `Other`.
-4. Deploy.
-5. Open app and click `Reload Links` if needed.
+4. Add env vars:
+   - `PROGRESS_GIST_ID=<your_gist_id>`
+   - `PROGRESS_GITHUB_TOKEN=<token_with_gist_scope>`
+   - Optional: `PROGRESS_WRITE_KEY=<your_secret>`
+5. Deploy.
+6. Open app and click `Reload Links` if needed.
 
 Notes:
 - `vercel.json` is already configured.
 - `data/day-plan.json` is served with `Cache-Control: no-store` for quick schedule updates.
 - Direct public hyperlinks are preloaded from `data/public-links.json`.
+- Cross-device completion sync is served via `/api/progress`.
 
 ## GitHub Pages
 
@@ -21,6 +26,7 @@ Notes:
 4. Open your Pages URL.
 
 Note: GitHub Pages works directly because the app now uses static public links only.
+Note: checkbox sync across devices requires Vercel (or another host that runs `api/progress.js`).
 
 ## Regenerate Plan Data
 

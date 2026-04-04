@@ -6,6 +6,7 @@ A student-focused EMS-style study portal for your GMAT content.
 
 - Renders your day-wise plan from `data/day-plan.json`.
 - Tracks task completion in browser local storage.
+- Syncs checked tasks across devices via a no-database backend (`/api/progress` + GitHub Gist).
 - Uses static public link map from `data/public-links.json`.
 - Auto-maps day-plan file references to direct public Drive links.
 - Works on any static host (GitHub Pages, Vercel, local server).
@@ -16,6 +17,7 @@ A student-focused EMS-style study portal for your GMAT content.
 - `styles.css`: UI styling
 - `app.js`: planner + static link integration logic
 - `config.js`: app config (folder ID)
+- `api/progress.js`: cross-device progress sync (Vercel function + GitHub Gist)
 - `data/day-plan.json`: day-wise schedule source
 - `data/public-links.json`: direct public Drive link map
 - `scripts/build_day_plan.py`: regenerate JSON from planner markdown
@@ -43,7 +45,11 @@ For direct file-open mode, open:
 1. Import this `ems-portal` folder as a project.
 2. Framework preset: `Other` (static).
 3. Output directory: `.`
-4. Deploy.
+4. Add env vars:
+   - `PROGRESS_GIST_ID=<your_gist_id>`
+   - `PROGRESS_GITHUB_TOKEN=<token_with_gist_scope>`
+   - Optional: `PROGRESS_WRITE_KEY=<custom_secret>`
+5. Deploy.
 
 The repo already includes `vercel.json` tuned for this portal.
 
@@ -56,6 +62,30 @@ The repo already includes `vercel.json` tuned for this portal.
 `ems-portal/.nojekyll` is already included.
 
 Note: GitHub Pages works directly because this is now static-only.
+Note: cross-device completion sync needs the Vercel function. On pure GitHub Pages, progress stays local to each device.
+
+## Cross-Device Progress (No DB)
+
+1. Create a private GitHub Gist containing one file named `stellar-progress.json` with:
+
+```json
+{}
+```
+
+2. Create a GitHub token with `gist` scope.
+3. Add `PROGRESS_GIST_ID` and `PROGRESS_GITHUB_TOKEN` in Vercel env vars.
+4. Keep `config.js` progress enabled:
+
+```js
+progress: {
+  enabled: true,
+  endpoint: "/api/progress",
+  studentId: "pulkit",
+  // writeKey: "same_value_as_PROGRESS_WRITE_KEY" // only if you enabled it
+}
+```
+
+5. Redeploy. Your checkbox state will sync across devices under that `studentId`.
 
 ## Regenerate Day Plan JSON
 

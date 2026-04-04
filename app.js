@@ -1,13 +1,37 @@
 const CONFIG = window.EMS_CONFIG || {};
 const STORAGE_KEY_DONE = "stellar_ems_done_v1";
+const DEFAULT_PROGRESS_ENDPOINT = "/api/progress";
+const DEFAULT_STUDENT_ID = "default";
+
+function loadLocalDoneSet() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_DONE) || "[]");
+    if (!Array.isArray(parsed)) return new Set();
+    const cleaned = parsed.filter((x) => typeof x === "string" && x.length);
+    return new Set(cleaned);
+  } catch (_err) {
+    return new Set();
+  }
+}
 
 const state = {
   dayPlan: null,
-  done: new Set(JSON.parse(localStorage.getItem(STORAGE_KEY_DONE) || "[]")),
+  done: loadLocalDoneSet(),
   staticFiles: [],
   publicByPath: new Map(),
   publicByName: new Map(),
   activeTab: "today",
+  progressSync: {
+    enabled: false,
+    endpoint: DEFAULT_PROGRESS_ENDPOINT,
+    studentId: DEFAULT_STUDENT_ID,
+    writeKey: "",
+    hasInitialized: false,
+    saveTimer: null,
+    saving: false,
+    dirty: false,
+    warned: false,
+  },
 };
 
 const el = {
@@ -60,6 +84,34 @@ function todayInTZ(tz) {
 
 function persistDone() {
   localStorage.setItem(STORAGE_KEY_DONE, JSON.stringify([...state.done]));
+}
+
+function getProgressConfig() {
+  const cfg = CONFIG?.progress || {};
+  const endpoint = String(cfg.endpoint || DEFAULT_PROGRESS_ENDPOINT).trim() || DEFAULT_PROGRESS_ENDPOINT;
+  const studentId = String(cfg.studentId || DEFAULT_STUDENT_ID).trim() || DEFAULT_STUDENT_ID;
+  const writeKey = String(cfg.writeKey || "");
+  const enabled = Boolean(cfg.enabled);
+  return { enabled, endpoint, studentId, writeKey };
+}
+
+function applyProgressConfig() {
+  const cfg = getProgressConfig();
+  state.progressSync.enabled = cfg.enabled;
+  state.progressSync.endpoint = cfg.endpoint;
+  state.progressSync.studentId = cfg.studentId;
+  state.progressSync.writeKey = cfg.writeKey;
+}
+
+function doneArray() {
+  return [...state.done].sort();
+}
+
+function setDoneFromArray(items) {
+  if (!Array.isArray(items)) return;
+  const cleaned = items.filter((x) => typeof x === "string" && x.length);
+  state.done = new Set(cleaned);
+  persistDone();
 }
 
 function taskKey(date, title) {
@@ -162,6 +214,7 @@ function renderTaskBlock(container, row) {
     }
     persistDone();
     updateStats();
+    queueProgressSave();
   });
 
   const middle = document.createElement("div");
@@ -516,6 +569,97 @@ function refreshAllViews() {
   updateStats();
 }
 
+async function fetchCloudProgress() {
+  const cfg = state.progressSync;
+  const url = new URL(cfg.endpoint, window.location.origin);
+  url.searchParams.set("studentId", cfg.studentId);
+
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Progress sync load failed (${res.status}): ${txt.slice(0, 180)}`);
+  }
+  return res.json();
+}
+
+async function saveCloudProgress() {
+  const cfg = state.progressSync;
+  const payload = {
+    studentId: cfg.studentId,
+    done: doneArray(),
+  };
+
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.writeKey) {
+    headers["X-Progress-Key"] = cfg.writeKey;
+  }
+
+  const res = await fetch(cfg.endpoint, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Progress sync save failed (${res.status}): ${txt.slice(0, 180)}`);
+  }
+}
+
+function queueProgressSave() {
+  const sync = state.progressSync;
+  if (!sync.enabled || !sync.hasInitialized) return;
+
+  sync.dirty = true;
+  if (sync.saveTimer) {
+    clearTimeout(sync.saveTimer);
+  }
+  sync.saveTimer = setTimeout(async () => {
+    if (sync.saving || !sync.dirty) return;
+    sync.dirty = false;
+    sync.saving = true;
+
+    try {
+      await saveCloudProgress();
+    } catch (err) {
+      sync.dirty = true;
+      if (!sync.warned) {
+        setStatus(err.message || "Progress sync save failed; using local storage for now.", true);
+        sync.warned = true;
+      }
+    } finally {
+      sync.saving = false;
+      if (sync.dirty) {
+        queueProgressSave();
+      }
+    }
+  }, 600);
+}
+
+async function initProgressSync() {
+  const sync = state.progressSync;
+  if (!sync.enabled) return;
+
+  try {
+    const remote = await fetchCloudProgress();
+    const remoteDone = Array.isArray(remote?.done) ? remote.done : [];
+    const localDone = doneArray();
+
+    if (!remoteDone.length && localDone.length) {
+      await saveCloudProgress();
+      setStatus(`Loaded ${state.staticFiles.length} static public links. Cloud progress initialized.`);
+    } else if (remoteDone.length) {
+      setDoneFromArray(remoteDone);
+      refreshAllViews();
+      setStatus(`Loaded ${state.staticFiles.length} static public links. Cloud progress synced.`);
+    }
+  } catch (err) {
+    setStatus("Loaded links. Cloud progress sync unavailable; using local progress on this device.");
+  } finally {
+    sync.hasInitialized = true;
+  }
+}
+
 async function syncDrive() {
   try {
     const publicLinks = await fetchPublicLinks();
@@ -546,6 +690,7 @@ function wireTabs() {
 
 async function init() {
   wireTabs();
+  applyProgressConfig();
 
   el.folderIdText.textContent = CONFIG?.drive?.folderId || "(missing)";
   if (el.reloadLinksBtn) {
@@ -559,6 +704,7 @@ async function init() {
     return;
   }
   await syncDrive();
+  await initProgressSync();
 }
 
 init();
