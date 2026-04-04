@@ -32,10 +32,9 @@
         <div class="sidebar-card">
           <p class="muted">Drive Folder</p>
           <p id="folderIdText" class="mono"></p>
-          <label class="label" for="apiKeyInput">Google API Key</label>
-          <input id="apiKeyInput" type="password" placeholder="Paste API key" />
-          <button id="saveApiKeyBtn" class="btn btn-primary">Save & Sync</button>
-          <p class="hint">Needed only for live Drive fetch.</p>
+          <p class="label">Secure Drive Proxy</p>
+          <button id="syncDriveBtn" class="btn btn-primary">Sync From Drive</button>
+          <p class="hint">Uses server-side key via Vercel env var `GOOGLE_DRIVE_API_KEY`.</p>
         </div>
       </aside>
 
@@ -71,6 +70,7 @@
     </div>
 
     <script src="./config.js"></script>
+    <script src="./data/day-plan-inline.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

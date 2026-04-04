@@ -1,6 +1,9 @@
 const CONFIG = window.EMS_CONFIG || {};
 const STORAGE_KEY_DONE = "stellar_ems_done_v1";
-const STORAGE_KEY_API = "stellar_ems_api_key_v1";
+const IS_LOCAL_RUNTIME =
+  window.location.protocol === "file:" ||
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1";
 
 const state = {
   dayPlan: null,
@@ -23,8 +26,7 @@ const el = {
   libraryTab: document.getElementById("tab-library"),
   menuTabs: document.getElementById("menuTabs"),
   folderIdText: document.getElementById("folderIdText"),
-  apiKeyInput: document.getElementById("apiKeyInput"),
-  saveApiKeyBtn: document.getElementById("saveApiKeyBtn"),
+  syncDriveBtn: document.getElementById("syncDriveBtn"),
 };
 
 function setStatus(message, isError = false) {
@@ -58,14 +60,6 @@ function todayInTZ(tz) {
   const m = parts.find((p) => p.type === "month")?.value;
   const d = parts.find((p) => p.type === "day")?.value;
   return `${y}-${m}-${d}`;
-}
-
-function getApiKey() {
-  return localStorage.getItem(STORAGE_KEY_API) || CONFIG?.drive?.apiKey || "";
-}
-
-function setApiKey(value) {
-  localStorage.setItem(STORAGE_KEY_API, value || "");
 }
 
 function persistDone() {
@@ -337,7 +331,7 @@ function renderLibrary() {
   if (!state.driveFiles.length) {
     const p = document.createElement("p");
     p.className = "note-line";
-    p.textContent = "No Drive index loaded yet. Add API key and click Save & Sync.";
+    p.textContent = "No Drive index loaded yet. Click Sync From Drive.";
     card.appendChild(p);
     el.libraryTab.appendChild(card);
     return;
@@ -402,24 +396,27 @@ function renderLibrary() {
 }
 
 async function fetchDayPlan() {
-  const res = await fetch("./data/day-plan.json", { cache: "no-cache" });
-  if (!res.ok) throw new Error("Failed to load day-plan.json");
-  return res.json();
+  try {
+    const res = await fetch("./data/day-plan.json", { cache: "no-cache" });
+    if (!res.ok) throw new Error("Failed to load day-plan.json");
+    return res.json();
+  } catch (err) {
+    if (window.__DAY_PLAN_INLINE?.days?.length) {
+      return window.__DAY_PLAN_INLINE;
+    }
+    throw err;
+  }
 }
 
-async function listFolderChildren(folderId, apiKey, pageToken = "") {
-  const q = `'${folderId}' in parents and trashed=false`;
-  const url = new URL("https://www.googleapis.com/drive/v3/files");
-  url.searchParams.set("q", q);
-  url.searchParams.set("pageSize", "1000");
-  url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,size)");
-  url.searchParams.set("key", apiKey);
+async function listFolderChildren(folderId, pageToken = "") {
+  const url = new URL("/api/drive-list", window.location.origin);
+  url.searchParams.set("folderId", folderId);
   if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const res = await fetch(url.toString());
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`Drive API error (${res.status}): ${txt.slice(0, 200)}`);
+    throw new Error(`Drive sync failed (${res.status}): ${txt.slice(0, 220)}`);
   }
   return res.json();
 }
@@ -433,7 +430,7 @@ function fileUrlForGoogle(file) {
   return `https://drive.google.com/file/d/${file.id}/view`;
 }
 
-async function indexDrive(folderId, apiKey) {
+async function indexDrive(folderId) {
   const FOLDER_MIME = "application/vnd.google-apps.folder";
   const queue = [{ id: folderId, path: [] }];
   const files = [];
@@ -443,7 +440,7 @@ async function indexDrive(folderId, apiKey) {
     let pageToken = "";
 
     do {
-      const payload = await listFolderChildren(current.id, apiKey, pageToken);
+      const payload = await listFolderChildren(current.id, pageToken);
       for (const file of payload.files || []) {
         if (file.mimeType === FOLDER_MIME) {
           queue.push({ id: file.id, path: [...current.path, file.name] });
@@ -485,6 +482,13 @@ function resolveFileUrl(ref) {
   const b = normalize(basename(ref));
   if (state.urlByBase.has(b)) return state.urlByBase.get(b);
 
+  if (IS_LOCAL_RUNTIME) {
+    const raw = String(ref);
+    if (raw.startsWith("/")) return encodeURI(`file://${raw}`);
+    const base = CONFIG?.local?.basePath;
+    if (base) return encodeURI(`file://${base.replace(/\/$/, "")}/${raw.replace(/^\/+/, "")}`);
+  }
+
   return null;
 }
 
@@ -496,23 +500,35 @@ function refreshAllViews() {
 }
 
 async function syncDrive() {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    setStatus("Add a Google API key to enable live Drive indexing.", true);
+  if (IS_LOCAL_RUNTIME) {
+    setStatus("Local mode active: using local file links. Drive sync via proxy is disabled locally.");
     state.driveFiles = [];
     buildIndexes();
     refreshAllViews();
     return;
   }
 
-  setStatus("Syncing from Google Drive... this can take a bit for large folders.");
+  if (!CONFIG?.drive?.folderId) {
+    setStatus("Missing Drive folder ID in config.js.", true);
+    state.driveFiles = [];
+    buildIndexes();
+    refreshAllViews();
+    return;
+  }
+
+  setStatus("Syncing from Google Drive via secure proxy...");
   try {
-    const files = await indexDrive(CONFIG.drive.folderId, apiKey);
+    const files = await indexDrive(CONFIG.drive.folderId);
     state.driveFiles = files;
     buildIndexes();
     setStatus(`Drive sync complete: ${files.length} files indexed.`);
   } catch (err) {
-    setStatus(err.message || "Drive sync failed.", true);
+    const msg = err.message || "Drive sync failed.";
+    if (msg.includes("404")) {
+      setStatus("Drive proxy endpoint not found. Deploy on Vercel and ensure /api/drive-list is available.", true);
+    } else {
+      setStatus(msg, true);
+    }
   }
 
   refreshAllViews();
@@ -538,12 +554,7 @@ async function init() {
   wireTabs();
 
   el.folderIdText.textContent = CONFIG?.drive?.folderId || "(missing)";
-  el.apiKeyInput.value = getApiKey();
-
-  el.saveApiKeyBtn.addEventListener("click", async () => {
-    setApiKey(el.apiKeyInput.value.trim());
-    await syncDrive();
-  });
+  el.syncDriveBtn.addEventListener("click", syncDrive);
 
   try {
     state.dayPlan = await fetchDayPlan();
@@ -552,8 +563,11 @@ async function init() {
     return;
   }
 
-  await syncDrive();
-  refreshAllViews();
+  if (!IS_LOCAL_RUNTIME) {
+    await syncDrive();
+  } else {
+    refreshAllViews();
+  }
 }
 
 init();
