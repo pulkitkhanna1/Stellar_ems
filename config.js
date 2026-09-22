@@ -11,13 +11,14 @@ window.EMS_CONFIG = {
     studentId: "pulkit"
   },
   firebase: {
-    enabled: false, // Set to true after pasting your Firebase project credentials below
-    apiKey: "",
-    authDomain: "",
-    projectId: "",
-    storageBucket: "",
-    messagingSenderId: "",
-    appId: ""
+    enabled: true,
+    apiKey: "AIzaSyDKQJV1Mwr2vvHzqaPQOIo2FglVfuIGjpM",
+    authDomain: "civil-tube-333014.firebaseapp.com",
+    projectId: "civil-tube-333014",
+    storageBucket: "civil-tube-333014.firebasestorage.app",
+    messagingSenderId: "458699559965",
+    appId: "1:458699559965:web:f4bed8a428b957bbc9a2f4",
+    measurementId: "G-6R24627ZZY"
   },
   local: {
     basePath: "/Users/pulkit/Downloads/Stellar"

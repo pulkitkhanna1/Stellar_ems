@@ -675,7 +675,26 @@ async function initFirebase() {
       state.firebaseConnected = false;
     });
 
+    // Real-time task progress sync across devices via Firestore
+    const progressDoc = state.db.collection("students").doc(studentId).collection("meta").doc("progress");
+    progressDoc.onSnapshot((doc) => {
+      if (doc.exists) {
+        const data = doc.data();
+        if (Array.isArray(data?.done)) {
+          const currentDone = doneArray();
+          const remoteDone = data.done;
+          if (JSON.stringify(currentDone) !== JSON.stringify(remoteDone)) {
+            setDoneFromArray(remoteDone);
+            refreshAllViews();
+          }
+        }
+      }
+    }, (err) => {
+      console.warn("Firestore progress listener error:", err);
+    });
+
     state.firebaseConnected = true;
+    setStatus(`Connected to Firebase. Real-time sync active for ${state.staticFiles.length} links & logs.`);
   } catch (err) {
     console.warn("Firebase initialization error:", err);
     state.firebaseConnected = false;
@@ -1190,19 +1209,25 @@ function queueProgressSave() {
     sync.saving = true;
 
     try {
-      await saveCloudProgress();
+      if (state.db && state.firebaseConnected) {
+        const studentId = CONFIG?.progress?.studentId || "default";
+        await state.db.collection("students").doc(studentId).collection("meta").doc("progress").set({
+          done: doneArray(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+
+      if (sync.enabled && !sync.disabled) {
+        await saveCloudProgress();
+      }
     } catch (err) {
       if (err.status === 405 || err.status === 404) {
-        // Backend API is not available on this static/local host; fallback to local storage
+        // Backend API endpoint is not available on this static/local host; Firestore or local storage used
         sync.disabled = true;
         sync.dirty = false;
-        if (!sync.warned) {
-          setStatus("Progress saved locally in browser storage (Cloud backend unavailable on this host).");
-          sync.warned = true;
-        }
       } else {
         sync.dirty = true;
-        if (!sync.warned) {
+        if (!sync.warned && !state.firebaseConnected) {
           setStatus(err.message || "Progress sync save failed; using local storage for now.", true);
           sync.warned = true;
         }
