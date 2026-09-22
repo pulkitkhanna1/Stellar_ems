@@ -262,14 +262,45 @@ function renderToday() {
 
   const left = document.createElement("div");
   left.className = "card";
+
+  const headerRow = document.createElement("div");
+  headerRow.className = "card-header-row";
+
   const h = document.createElement("h3");
   h.textContent = `${day.date} (${day.weekday})`;
-  left.appendChild(h);
+
+  const nightBadge = document.createElement("span");
+  nightBadge.className = "night-badge";
+  nightBadge.innerHTML = "🌙 10:00 PM – 12:00 AM (2h Night Sprint)";
+
+  headerRow.append(h, nightBadge);
+  left.appendChild(headerRow);
+
+  // Visual 2-Hour Study Timeline
+  const timeline = document.createElement("div");
+  timeline.className = "night-timeline";
+  timeline.innerHTML = `
+    <div class="timeline-step">
+      <span class="step-time">22:00 - 23:15</span>
+      <span class="step-name">Concept (75m @ 1.25x)</span>
+    </div>
+    <div class="timeline-arrow">➔</div>
+    <div class="timeline-step">
+      <span class="step-time">23:15 - 23:50</span>
+      <span class="step-name">Target DPP (35m)</span>
+    </div>
+    <div class="timeline-arrow">➔</div>
+    <div class="timeline-step">
+      <span class="step-time">23:50 - 00:00</span>
+      <span class="step-name">Error Log (10m)</span>
+    </div>
+  `;
+  left.appendChild(timeline);
 
   if (backlogRows.length) {
     const sub = document.createElement("h4");
     sub.textContent = `Backlog Stack (${backlogRows.length})`;
-    sub.style.margin = "0 0 8px";
+    sub.style.margin = "12px 0 8px";
     left.appendChild(sub);
 
     const backlogList = document.createElement("div");
@@ -279,35 +310,39 @@ function renderToday() {
   }
 
   const todaySub = document.createElement("h4");
-  todaySub.textContent = "Today Plan";
-  todaySub.style.margin = "12px 0 8px";
+  todaySub.textContent = `Today: ${day.core}`;
+  todaySub.style.margin = "16px 0 8px";
   left.appendChild(todaySub);
 
   const taskList = document.createElement("div");
   taskList.className = "task-list";
-  renderTaskBlock(taskList, {
-    date: day.date,
-    title: day.core,
-    files: day.files,
-    test: day.test_number,
-  });
 
-  (day.focus_plan || []).forEach((t) => {
+  if (day.focus_plan?.length) {
+    day.focus_plan.forEach((t) => {
+      renderTaskBlock(taskList, {
+        date: day.date,
+        title: t.title,
+        files: t.files,
+        test: null,
+      });
+    });
+  } else {
     renderTaskBlock(taskList, {
       date: day.date,
-      title: t.title,
-      files: t.files,
-      test: null,
+      title: day.core,
+      files: day.files,
+      test: day.test_number,
     });
-  });
+  }
 
   left.appendChild(taskList);
   wrapper.appendChild(left);
 
   const right = document.createElement("div");
   right.className = "card";
+
   const h2 = document.createElement("h3");
-  h2.textContent = "Execution Notes";
+  h2.textContent = "Night Study Notes & Tests";
   right.appendChild(h2);
 
   (day.notes || []).forEach((n) => {
@@ -324,15 +359,29 @@ function renderToday() {
     right.appendChild(filesWrap);
   }
 
+  // Working Professional Night Protocol Widget
+  const protocolBox = document.createElement("div");
+  protocolBox.className = "protocol-box";
+  protocolBox.innerHTML = `
+    <h4>🏢 Working Professional Protocol</h4>
+    <ul class="protocol-list">
+      <li><strong>⚡ 1.25x–1.5x Speed:</strong> Finish 90m lecture content within 60–75 mins.</li>
+      <li><strong>🎯 15–20 DPP Questions:</strong> Prioritize deep understanding over high volume.</li>
+      <li><strong>🛑 12:00 AM Hard Stop:</strong> Zero overrun policy to stay energized for office tomorrow.</li>
+      <li><strong>📓 Nightly Error Log:</strong> Review wrong questions before sleeping for peak memory retention.</li>
+    </ul>
+  `;
+  right.appendChild(protocolBox);
+
   wrapper.appendChild(right);
   el.todayTab.appendChild(wrapper);
 
   if (backlogRows.length) {
     el.heroTitle.textContent = `Backlog ${backlogRows.length} + Today: ${day.core}`;
-    el.heroSub.textContent = `Clear the backlog stack first, then complete today's core flow.`;
+    el.heroSub.textContent = `2h Night Sprint (10 PM – 12 AM). Complete today's 3-step sequence.`;
   } else {
     el.heroTitle.textContent = `Today: ${day.core}`;
-    el.heroSub.textContent = `Stay consistent. Finish core + tests + review loop.`;
+    el.heroSub.textContent = `2h Night Sprint (10 PM – 12 AM). Stay consistent, log errors, sleep on time.`;
   }
 }
 
@@ -446,6 +495,8 @@ function renderLibrary() {
   controls.append(search, typeFilter);
   card.appendChild(controls);
 
+  const tableWrap = document.createElement("div");
+  tableWrap.className = "table-responsive";
   const table = document.createElement("table");
   table.className = "table";
   table.innerHTML = `
@@ -455,7 +506,8 @@ function renderLibrary() {
     <tbody></tbody>
   `;
   const tbody = table.querySelector("tbody");
-  card.appendChild(table);
+  tableWrap.appendChild(table);
+  card.appendChild(tableWrap);
   el.libraryTab.appendChild(card);
 
   const rerender = () => {
@@ -577,7 +629,9 @@ async function fetchCloudProgress() {
   const res = await fetch(url.toString(), { cache: "no-store" });
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`Progress sync load failed (${res.status}): ${txt.slice(0, 180)}`);
+    const err = new Error(`Progress sync load failed (${res.status}): ${txt.slice(0, 180)}`);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -602,13 +656,15 @@ async function saveCloudProgress() {
 
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`Progress sync save failed (${res.status}): ${txt.slice(0, 180)}`);
+    const err = new Error(`Progress sync save failed (${res.status}): ${txt.slice(0, 180)}`);
+    err.status = res.status;
+    throw err;
   }
 }
 
 function queueProgressSave() {
   const sync = state.progressSync;
-  if (!sync.enabled || !sync.hasInitialized) return;
+  if (!sync.enabled || !sync.hasInitialized || sync.disabled) return;
 
   sync.dirty = true;
   if (sync.saveTimer) {
@@ -622,14 +678,24 @@ function queueProgressSave() {
     try {
       await saveCloudProgress();
     } catch (err) {
-      sync.dirty = true;
-      if (!sync.warned) {
-        setStatus(err.message || "Progress sync save failed; using local storage for now.", true);
-        sync.warned = true;
+      if (err.status === 405 || err.status === 404) {
+        // Backend API is not available on this static/local host; fallback to local storage
+        sync.disabled = true;
+        sync.dirty = false;
+        if (!sync.warned) {
+          setStatus("Progress saved locally in browser storage (Cloud backend unavailable on this host).");
+          sync.warned = true;
+        }
+      } else {
+        sync.dirty = true;
+        if (!sync.warned) {
+          setStatus(err.message || "Progress sync save failed; using local storage for now.", true);
+          sync.warned = true;
+        }
       }
     } finally {
       sync.saving = false;
-      if (sync.dirty) {
+      if (sync.dirty && !sync.disabled) {
         queueProgressSave();
       }
     }
@@ -654,7 +720,10 @@ async function initProgressSync() {
       setStatus(`Loaded ${state.staticFiles.length} static public links. Cloud progress synced.`);
     }
   } catch (err) {
-    setStatus("Loaded links. Cloud progress sync unavailable; using local progress on this device.");
+    if (err.status === 405 || err.status === 404) {
+      sync.disabled = true;
+    }
+    setStatus("Loaded links. Progress saved locally on this device.");
   } finally {
     sync.hasInitialized = true;
   }

@@ -115,17 +115,17 @@ async function writeStore(fileName, store) {
 
 module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") {
-    res.setHeader("Allow", "GET,PUT,OPTIONS");
+    res.setHeader("Allow", "GET,PUT,POST,OPTIONS");
     return res.status(204).send("");
   }
 
-  if (!["GET", "PUT"].includes(req.method)) {
-    res.setHeader("Allow", "GET,PUT,OPTIONS");
+  if (!["GET", "PUT", "POST"].includes(req.method)) {
+    res.setHeader("Allow", "GET,PUT,POST,OPTIONS");
     return json(res, 405, { error: "Method not allowed" });
   }
 
   const writeKey = process.env.PROGRESS_WRITE_KEY || "";
-  if (req.method === "PUT" && writeKey) {
+  if (["PUT", "POST"].includes(req.method) && writeKey) {
     const provided = asSingle(req.headers["x-progress-key"], "");
     if (provided !== writeKey) {
       return json(res, 401, { error: "Invalid progress write key" });
