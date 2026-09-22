@@ -33,6 +33,21 @@
       </aside>
 
       <main class="main">
+        <div class="user-strip">
+          <div class="user-chip-group">
+            <span class="user-strip-icon">👤</span>
+            <label for="userSelect" class="user-strip-label">Student:</label>
+            <select id="userSelect" class="user-strip-select"></select>
+            <button id="addUserBtn" class="btn btn-sm btn-outline" title="Add a new student profile">+ Add User</button>
+          </div>
+          <div class="user-chip-group">
+            <span class="user-strip-icon">📅</span>
+            <label for="startDateInput" class="user-strip-label">Start Date:</label>
+            <input type="date" id="startDateInput" class="user-strip-date" />
+            <button id="applyStartDateBtn" class="btn btn-sm btn-primary" title="Update study calendar start date">Set Date</button>
+          </div>
+        </div>
+
         <header class="hero">
           <div>
             <p class="eyebrow">Focus Mode</p>

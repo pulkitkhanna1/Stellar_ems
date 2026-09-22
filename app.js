@@ -1,12 +1,55 @@
 const CONFIG = window.EMS_CONFIG || {};
-const STORAGE_KEY_DONE = "stellar_ems_done_v1";
-const STORAGE_KEY_LOGS = "stellar_ems_logs_v1";
 const DEFAULT_PROGRESS_ENDPOINT = "/api/progress";
-const DEFAULT_STUDENT_ID = "default";
+const DEFAULT_STUDENT_ID = "pulkit";
+const STORAGE_KEY_ACTIVE_STUDENT = "stellar_ems_active_student";
+const STORAGE_KEY_USERS = "stellar_ems_users_list";
 
-function loadLocalDoneSet() {
+function normalizeStudentId(raw) {
+  const value = String(raw || DEFAULT_STUDENT_ID).trim().toLowerCase();
+  return value.replace(/[^a-z0-9_-]/g, "_").slice(0, 50) || DEFAULT_STUDENT_ID;
+}
+
+function loadUserList() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_DONE) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || "[]");
+    const initial = CONFIG?.progress?.studentId || DEFAULT_STUDENT_ID;
+    const set = new Set([initial, ...(Array.isArray(parsed) ? parsed : [])]);
+    return [...set];
+  } catch (_err) {
+    return [CONFIG?.progress?.studentId || DEFAULT_STUDENT_ID];
+  }
+}
+
+function saveUserList(users) {
+  localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+}
+
+function getActiveStudentId() {
+  const stored = localStorage.getItem(STORAGE_KEY_ACTIVE_STUDENT);
+  return normalizeStudentId(stored || CONFIG?.progress?.studentId || DEFAULT_STUDENT_ID);
+}
+
+function setActiveStudentId(id) {
+  const clean = normalizeStudentId(id);
+  localStorage.setItem(STORAGE_KEY_ACTIVE_STUDENT, clean);
+  state.currentStudentId = clean;
+}
+
+function getUserDoneKey(studentId) {
+  return `stellar_ems_done_${studentId}`;
+}
+
+function getUserLogsKey(studentId) {
+  return `stellar_ems_logs_${studentId}`;
+}
+
+function getUserStartDateKey(studentId) {
+  return `stellar_ems_start_date_${studentId}`;
+}
+
+function loadLocalDoneSet(studentId = getActiveStudentId()) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(getUserDoneKey(studentId)) || "[]");
     if (!Array.isArray(parsed)) return new Set();
     const cleaned = parsed.filter((x) => typeof x === "string" && x.length);
     return new Set(cleaned);
@@ -15,21 +58,35 @@ function loadLocalDoneSet() {
   }
 }
 
-function loadLocalLogs() {
+function loadLocalLogs(studentId = getActiveStudentId()) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_LOGS) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(getUserLogsKey(studentId)) || "[]");
     return Array.isArray(parsed) ? parsed : [];
   } catch (_err) {
     return [];
   }
 }
 
+function getUserStartDate(studentId = getActiveStudentId()) {
+  const stored = localStorage.getItem(getUserStartDateKey(studentId));
+  return stored || CONFIG?.startDate || "2026-09-27";
+}
+
+function setUserStartDate(studentId, dateStr) {
+  localStorage.setItem(getUserStartDateKey(studentId), dateStr);
+}
+
 const state = {
+  currentStudentId: getActiveStudentId(),
+  users: loadUserList(),
+  baseDays: [],
   dayPlan: null,
-  done: loadLocalDoneSet(),
-  logs: loadLocalLogs(),
+  done: loadLocalDoneSet(getActiveStudentId()),
+  logs: loadLocalLogs(getActiveStudentId()),
   db: null,
   firebaseConnected: false,
+  fsUnsubLogs: null,
+  fsUnsubProgress: null,
   staticFiles: [],
   publicByPath: new Map(),
   publicByName: new Map(),
@@ -44,7 +101,7 @@ const state = {
   progressSync: {
     enabled: false,
     endpoint: DEFAULT_PROGRESS_ENDPOINT,
-    studentId: DEFAULT_STUDENT_ID,
+    studentId: getActiveStudentId(),
     writeKey: "",
     hasInitialized: false,
     saveTimer: null,
@@ -66,6 +123,10 @@ const el = {
   logsTab: document.getElementById("tab-logs"),
   libraryTab: document.getElementById("tab-library"),
   menuTabs: document.getElementById("menuTabs"),
+  userSelect: document.getElementById("userSelect"),
+  addUserBtn: document.getElementById("addUserBtn"),
+  startDateInput: document.getElementById("startDateInput"),
+  applyStartDateBtn: document.getElementById("applyStartDateBtn"),
   folderIdText: document.getElementById("folderIdText"),
   reloadLinksBtn: document.getElementById("syncDriveBtn"),
 };
@@ -92,7 +153,7 @@ function basename(path) {
 
 function todayInTZ(tz) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz || "UTC",
+    timeZone: tz || "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -104,43 +165,125 @@ function todayInTZ(tz) {
 }
 
 function persistDone() {
-  localStorage.setItem(STORAGE_KEY_DONE, JSON.stringify([...state.done]));
+  localStorage.setItem(getUserDoneKey(state.currentStudentId), JSON.stringify([...state.done]));
 }
 
-function getProgressConfig() {
-  const cfg = CONFIG?.progress || {};
-  const endpoint = String(cfg.endpoint || DEFAULT_PROGRESS_ENDPOINT).trim() || DEFAULT_PROGRESS_ENDPOINT;
-  const studentId = String(cfg.studentId || DEFAULT_STUDENT_ID).trim() || DEFAULT_STUDENT_ID;
-  const writeKey = String(cfg.writeKey || "");
-  const enabled = Boolean(cfg.enabled);
-  return { enabled, endpoint, studentId, writeKey };
+function persistLogs() {
+  localStorage.setItem(getUserLogsKey(state.currentStudentId), JSON.stringify(state.logs));
 }
 
-function applyProgressConfig() {
-  const cfg = getProgressConfig();
-  state.progressSync.enabled = cfg.enabled;
-  state.progressSync.endpoint = cfg.endpoint;
-  state.progressSync.studentId = cfg.studentId;
-  state.progressSync.writeKey = cfg.writeKey;
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function parseDateUTC(dateStr) {
+  if (!dateStr || typeof dateStr !== "string") return new Date();
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 }
 
-function doneArray() {
-  return [...state.done].sort();
+function formatDateUTC(dateObj) {
+  const y = dateObj.getUTCFullYear();
+  const m = String(dateObj.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dateObj.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-function setDoneFromArray(items) {
-  if (!Array.isArray(items)) return;
-  const cleaned = items.filter((x) => typeof x === "string" && x.length);
-  state.done = new Set(cleaned);
-  persistDone();
+function buildNightFocusPlan(day) {
+  const files = day.files || [];
+  const videos = files.filter((f) => f.toLowerCase().endsWith(".mp4"));
+  const notesPdf = files.filter((f) => f.toLowerCase().endsWith(".pdf") && !f.toLowerCase().includes("dpp"));
+  const dpps = files.filter((f) => f.toLowerCase().includes("dpp"));
+  const otherFiles = files.filter((f) => !videos.includes(f) && !notesPdf.includes(f) && !dpps.includes(f));
+  const testFiles = day.test_files || [];
+  const testNumber = day.test_number;
+
+  const focusPlan = [];
+
+  // Block 1: 22:00 - 23:15
+  if (videos.length) {
+    focusPlan.push({
+      title: "22:00-23:15: Watch lecture (1.25x-1.5x) & annotate class notes",
+      files: [...videos, ...notesPdf],
+    });
+  } else if (notesPdf.length || otherFiles.length) {
+    focusPlan.push({
+      title: "22:00-23:00: High-yield concept recap & formula review",
+      files: [...notesPdf, ...otherFiles],
+    });
+  } else {
+    focusPlan.push({
+      title: "22:00-23:00: Target concept recap & weak area drilling",
+      files: ["Planner/Core/STELLAR_MASTER_STUDY_PLAN.md"],
+    });
+  }
+
+  // Block 2: 23:15 - 23:50
+  if (dpps.length) {
+    focusPlan.push({
+      title: "23:15-23:50: Timed DPP sprint (15-20 target questions)",
+      files: dpps,
+    });
+  } else if (testFiles.length && testNumber) {
+    focusPlan.push({
+      title: `23:00-23:50: PT${String(testNumber).padStart(2, "0")} timed sectional drill & accuracy test`,
+      files: testFiles,
+    });
+  } else {
+    focusPlan.push({
+      title: "23:00-23:50: Timed 20-question mixed practice drill",
+      files: [],
+    });
+  }
+
+  // Block 3: 23:50 - 00:00
+  focusPlan.push({
+    title: "23:50-00:00: Log mistakes in error tracker & daily wind down",
+    files: [],
+  });
+
+  return focusPlan;
 }
 
-function taskKey(date, title) {
-  return `${date}::${title}`;
+function rebuildDynamicPlan(startDateStr) {
+  if (!state.baseDays || !state.baseDays.length) return;
+  const validStartDate = startDateStr || getUserStartDate(state.currentStudentId);
+  const startObj = parseDateUTC(validStartDate);
+
+  const projectedDays = state.baseDays.map((day, index) => {
+    const current = new Date(startObj.getTime() + index * 24 * 60 * 60 * 1000);
+    const dateStr = formatDateUTC(current);
+    const weekdayStr = WEEKDAYS[current.getUTCDay()];
+
+    const dayCopy = {
+      ...day,
+      date: dateStr,
+      weekday: weekdayStr,
+    };
+    dayCopy.focus_plan = buildNightFocusPlan(dayCopy);
+
+    const notes = [];
+    if (dayCopy.test_number) {
+      notes.push(`Weekend Heavy: PT${String(dayCopy.test_number).padStart(2, "0")} + targeted post-test error review (22:00-00:00)`);
+      notes.push("Office Tip: Complete PT on weekend night slot; analyze incorrect questions before sleep.");
+    } else if (weekdayStr === "Friday") {
+      notes.push("Light Friday Close: 60-minute weekly concept recap + update error log + plan weekend tests");
+    } else if ((dayCopy.core || "").includes("Revision")) {
+      notes.push("Revision Day: Redo wrong questions from error log + 20 timed mixed questions");
+    } else {
+      notes.push("Daily Sprint (10 PM - 12 AM): 75m Lecture (1.25x) + 35m DPP + 10m Error Log");
+    }
+    dayCopy.notes = notes;
+    return dayCopy;
+  });
+
+  state.dayPlan = {
+    generated_at: new Date().toISOString(),
+    start_date: validStartDate,
+    days: projectedDays,
+  };
 }
 
 function getStartDate() {
-  return CONFIG?.startDate || state.dayPlan?.start_date || "";
+  return getUserStartDate(state.currentStudentId);
 }
 
 function isOnOrAfter(dateStr, floorDate) {
@@ -635,12 +778,55 @@ function resolveFileUrl(ref) {
   return null;
 }
 
-function persistLogs() {
-  localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(state.logs));
-}
-
 function getFirebaseConfig() {
   return CONFIG?.firebase || {};
+}
+
+function attachFirebaseListeners(studentId) {
+  if (!state.db || !state.firebaseConnected) return;
+
+  if (state.fsUnsubLogs) {
+    state.fsUnsubLogs();
+    state.fsUnsubLogs = null;
+  }
+  if (state.fsUnsubProgress) {
+    state.fsUnsubProgress();
+    state.fsUnsubProgress = null;
+  }
+
+  const cleanId = normalizeStudentId(studentId);
+  const logsCol = state.db.collection("students").doc(cleanId).collection("logs");
+
+  state.fsUnsubLogs = logsCol.orderBy("createdAt", "desc").onSnapshot((snapshot) => {
+    const items = [];
+    snapshot.forEach((doc) => {
+      items.push({ id: doc.id, ...doc.data() });
+    });
+    state.logs = items;
+    persistLogs();
+    if (state.activeTab === "logs") {
+      renderLogs();
+    }
+  }, (err) => {
+    console.warn("Firestore logs listener error:", err);
+  });
+
+  const progressDoc = state.db.collection("students").doc(cleanId).collection("meta").doc("progress");
+  state.fsUnsubProgress = progressDoc.onSnapshot((doc) => {
+    if (doc.exists) {
+      const data = doc.data();
+      if (Array.isArray(data?.done)) {
+        const currentDone = doneArray();
+        const remoteDone = data.done;
+        if (JSON.stringify(currentDone) !== JSON.stringify(remoteDone)) {
+          setDoneFromArray(remoteDone);
+          refreshAllViews();
+        }
+      }
+    }
+  }, (err) => {
+    console.warn("Firestore progress listener error:", err);
+  });
 }
 
 async function initFirebase() {
@@ -655,46 +841,24 @@ async function initFirebase() {
       firebase.initializeApp(fbConfig);
     }
     state.db = firebase.firestore();
+    state.firebaseConnected = true;
 
-    const studentId = CONFIG?.progress?.studentId || "default";
-    const logsCol = state.db.collection("students").doc(studentId).collection("logs");
+    attachFirebaseListeners(state.currentStudentId);
 
-    logsCol.orderBy("createdAt", "desc").onSnapshot((snapshot) => {
-      const items = [];
-      snapshot.forEach((doc) => {
-        items.push({ id: doc.id, ...doc.data() });
-      });
-      state.logs = items;
-      persistLogs();
-      state.firebaseConnected = true;
-      if (state.activeTab === "logs") {
-        renderLogs();
-      }
-    }, (err) => {
-      console.warn("Firestore onSnapshot error:", err);
-      state.firebaseConnected = false;
-    });
-
-    // Real-time task progress sync across devices via Firestore
-    const progressDoc = state.db.collection("students").doc(studentId).collection("meta").doc("progress");
-    progressDoc.onSnapshot((doc) => {
-      if (doc.exists) {
-        const data = doc.data();
-        if (Array.isArray(data?.done)) {
-          const currentDone = doneArray();
-          const remoteDone = data.done;
-          if (JSON.stringify(currentDone) !== JSON.stringify(remoteDone)) {
-            setDoneFromArray(remoteDone);
-            refreshAllViews();
-          }
+    // Sync cloud profile start date if present
+    try {
+      const profileDoc = await state.db.collection("students").doc(state.currentStudentId).collection("meta").doc("profile").get();
+      if (profileDoc.exists && profileDoc.data()?.startDate) {
+        const cloudStart = profileDoc.data().startDate;
+        if (cloudStart !== getUserStartDate(state.currentStudentId)) {
+          setUserStartDate(state.currentStudentId, cloudStart);
+          rebuildDynamicPlan(cloudStart);
+          renderUserControls();
         }
       }
-    }, (err) => {
-      console.warn("Firestore progress listener error:", err);
-    });
+    } catch (_e) {}
 
-    state.firebaseConnected = true;
-    setStatus(`Connected to Firebase. Real-time sync active for ${state.staticFiles.length} links & logs.`);
+    setStatus(`Connected to Firebase. Active student: ${state.currentStudentId}.`);
   } catch (err) {
     console.warn("Firebase initialization error:", err);
     state.firebaseConnected = false;
@@ -702,7 +866,7 @@ async function initFirebase() {
 }
 
 async function addLogEntry(entry) {
-  const studentId = CONFIG?.progress?.studentId || "default";
+  const studentId = state.currentStudentId;
   const now = new Date().toISOString();
   const newEntry = {
     ...entry,
@@ -734,7 +898,7 @@ async function addLogEntry(entry) {
 }
 
 async function toggleLogStatus(id) {
-  const studentId = CONFIG?.progress?.studentId || "default";
+  const studentId = state.currentStudentId;
   const item = state.logs.find((l) => l.id === id);
   if (!item) return;
 
@@ -758,7 +922,7 @@ async function toggleLogStatus(id) {
 }
 
 async function deleteLogEntry(id) {
-  const studentId = CONFIG?.progress?.studentId || "default";
+  const studentId = state.currentStudentId;
   if (state.db && state.firebaseConnected) {
     try {
       await state.db.collection("students").doc(studentId).collection("logs").doc(id).delete();
@@ -770,6 +934,118 @@ async function deleteLogEntry(id) {
   state.logs = state.logs.filter((l) => l.id !== id);
   persistLogs();
   renderLogs();
+}
+
+function switchStudent(newStudentId) {
+  const cleanId = normalizeStudentId(newStudentId);
+  setActiveStudentId(cleanId);
+  state.done = loadLocalDoneSet(cleanId);
+  state.logs = loadLocalLogs(cleanId);
+
+  const start = getUserStartDate(cleanId);
+  rebuildDynamicPlan(start);
+
+  if (state.db && state.firebaseConnected) {
+    attachFirebaseListeners(cleanId);
+    state.db.collection("students").doc(cleanId).collection("meta").doc("profile").get().then((doc) => {
+      if (doc.exists && doc.data()?.startDate) {
+        const cloudStart = doc.data().startDate;
+        if (cloudStart !== getUserStartDate(cleanId)) {
+          setUserStartDate(cleanId, cloudStart);
+          rebuildDynamicPlan(cloudStart);
+          renderUserControls();
+          refreshAllViews();
+        }
+      }
+    }).catch((_e) => {});
+  }
+
+  renderUserControls();
+  refreshAllViews();
+  setStatus(`Active Student: ${cleanId}. Schedule begins on ${getUserStartDate(cleanId)}.`);
+}
+
+function renderUserControls() {
+  if (el.userSelect) {
+    el.userSelect.innerHTML = "";
+    state.users.forEach((u) => {
+      const opt = document.createElement("option");
+      opt.value = u;
+      opt.textContent = u.charAt(0).toUpperCase() + u.slice(1);
+      if (u === state.currentStudentId) opt.selected = true;
+      el.userSelect.appendChild(opt);
+    });
+  }
+
+  if (el.startDateInput) {
+    el.startDateInput.value = getUserStartDate(state.currentStudentId);
+  }
+}
+
+function wireUserControls() {
+  if (el.userSelect) {
+    el.userSelect.addEventListener("change", (e) => {
+      switchStudent(e.target.value);
+    });
+  }
+
+  if (el.addUserBtn) {
+    el.addUserBtn.addEventListener("click", () => {
+      const name = prompt("Enter new student name / username:");
+      if (!name || !name.trim()) return;
+      const cleanId = normalizeStudentId(name);
+      if (!state.users.includes(cleanId)) {
+        state.users.push(cleanId);
+        saveUserList(state.users);
+      }
+
+      const defaultStart = todayInTZ(CONFIG.timezone);
+      const chosenStart = prompt(`Enter start date for ${cleanId} (YYYY-MM-DD):`, defaultStart);
+      if (chosenStart && /^\d{4}-\d{2}-\d{2}$/.test(chosenStart.trim())) {
+        setUserStartDate(cleanId, chosenStart.trim());
+      } else {
+        setUserStartDate(cleanId, defaultStart);
+      }
+
+      if (state.db && state.firebaseConnected) {
+        state.db.collection("students").doc(cleanId).collection("meta").doc("profile").set({
+          studentId: cleanId,
+          name: name.trim(),
+          startDate: getUserStartDate(cleanId),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }).catch((err) => console.warn("Failed to create student in Firestore:", err));
+      }
+
+      switchStudent(cleanId);
+    });
+  }
+
+  if (el.applyStartDateBtn) {
+    el.applyStartDateBtn.addEventListener("click", async () => {
+      const newDate = el.startDateInput.value;
+      if (!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+        alert("Please select a valid start date (YYYY-MM-DD).");
+        return;
+      }
+
+      setUserStartDate(state.currentStudentId, newDate);
+      rebuildDynamicPlan(newDate);
+
+      if (state.db && state.firebaseConnected) {
+        try {
+          await state.db.collection("students").doc(state.currentStudentId).collection("meta").doc("profile").set({
+            startDate: newDate,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        } catch (err) {
+          console.warn("Failed to update start date in Firestore:", err);
+        }
+      }
+
+      refreshAllViews();
+      setStatus(`Start date updated to ${newDate} for student ${state.currentStudentId}.`);
+    });
+  }
 }
 
 function renderLogs() {
@@ -1210,7 +1486,7 @@ function queueProgressSave() {
 
     try {
       if (state.db && state.firebaseConnected) {
-        const studentId = CONFIG?.progress?.studentId || "default";
+        const studentId = state.currentStudentId;
         await state.db.collection("students").doc(studentId).collection("meta").doc("progress").set({
           done: doneArray(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1298,6 +1574,8 @@ function wireTabs() {
 
 async function init() {
   wireTabs();
+  wireUserControls();
+  renderUserControls();
   applyProgressConfig();
 
   if (el.folderIdText) {
@@ -1308,7 +1586,9 @@ async function init() {
   }
 
   try {
-    state.dayPlan = await fetchDayPlan();
+    const rawPlan = await fetchDayPlan();
+    state.baseDays = rawPlan?.days || [];
+    rebuildDynamicPlan(getUserStartDate(state.currentStudentId));
   } catch (err) {
     setStatus(err.message || "Could not load planner data.", true);
     return;
