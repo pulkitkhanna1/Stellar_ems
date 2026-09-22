@@ -10,6 +10,15 @@ window.EMS_CONFIG = {
     endpoint: "/api/progress",
     studentId: "pulkit"
   },
+  firebase: {
+    enabled: false, // Set to true after pasting your Firebase project credentials below
+    apiKey: "",
+    authDomain: "",
+    projectId: "",
+    storageBucket: "",
+    messagingSenderId: "",
+    appId: ""
+  },
   local: {
     basePath: "/Users/pulkit/Downloads/Stellar"
   }

@@ -26,6 +26,7 @@
         <nav class="menu" id="menuTabs">
           <button data-tab="today" class="menu-item active">Today</button>
           <button data-tab="planner" class="menu-item">Day-Wise Plan</button>
+          <button data-tab="logs" class="menu-item">Error & Study Log</button>
           <button data-tab="library" class="menu-item">Resource Library</button>
         </nav>
 
@@ -58,9 +59,15 @@
 
         <section id="tab-today" class="tab-panel"></section>
         <section id="tab-planner" class="tab-panel hidden"></section>
+        <section id="tab-logs" class="tab-panel hidden"></section>
         <section id="tab-library" class="tab-panel hidden"></section>
       </main>
     </div>
+
+    <!-- Firebase SDK (Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 
     <script src="./config.js"></script>
     <script src="./data/day-plan-inline.js"></script>

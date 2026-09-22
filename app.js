@@ -1,5 +1,6 @@
 const CONFIG = window.EMS_CONFIG || {};
 const STORAGE_KEY_DONE = "stellar_ems_done_v1";
+const STORAGE_KEY_LOGS = "stellar_ems_logs_v1";
 const DEFAULT_PROGRESS_ENDPOINT = "/api/progress";
 const DEFAULT_STUDENT_ID = "default";
 
@@ -14,13 +15,32 @@ function loadLocalDoneSet() {
   }
 }
 
+function loadLocalLogs() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_LOGS) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
 const state = {
   dayPlan: null,
   done: loadLocalDoneSet(),
+  logs: loadLocalLogs(),
+  db: null,
+  firebaseConnected: false,
   staticFiles: [],
   publicByPath: new Map(),
   publicByName: new Map(),
   activeTab: "today",
+  logsFilter: {
+    search: "",
+    section: "All",
+    rootCause: "All",
+    status: "All",
+    showForm: false,
+  },
   progressSync: {
     enabled: false,
     endpoint: DEFAULT_PROGRESS_ENDPOINT,
@@ -43,6 +63,7 @@ const el = {
   statusBar: document.getElementById("statusBar"),
   todayTab: document.getElementById("tab-today"),
   plannerTab: document.getElementById("tab-planner"),
+  logsTab: document.getElementById("tab-logs"),
   libraryTab: document.getElementById("tab-library"),
   menuTabs: document.getElementById("menuTabs"),
   folderIdText: document.getElementById("folderIdText"),
@@ -614,9 +635,502 @@ function resolveFileUrl(ref) {
   return null;
 }
 
+function persistLogs() {
+  localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(state.logs));
+}
+
+function getFirebaseConfig() {
+  return CONFIG?.firebase || {};
+}
+
+async function initFirebase() {
+  const fbConfig = getFirebaseConfig();
+  if (!fbConfig.enabled || !window.firebase || !fbConfig.projectId || !fbConfig.apiKey) {
+    state.firebaseConnected = false;
+    return;
+  }
+
+  try {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(fbConfig);
+    }
+    state.db = firebase.firestore();
+
+    const studentId = CONFIG?.progress?.studentId || "default";
+    const logsCol = state.db.collection("students").doc(studentId).collection("logs");
+
+    logsCol.orderBy("createdAt", "desc").onSnapshot((snapshot) => {
+      const items = [];
+      snapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() });
+      });
+      state.logs = items;
+      persistLogs();
+      state.firebaseConnected = true;
+      if (state.activeTab === "logs") {
+        renderLogs();
+      }
+    }, (err) => {
+      console.warn("Firestore onSnapshot error:", err);
+      state.firebaseConnected = false;
+    });
+
+    state.firebaseConnected = true;
+  } catch (err) {
+    console.warn("Firebase initialization error:", err);
+    state.firebaseConnected = false;
+  }
+}
+
+async function addLogEntry(entry) {
+  const studentId = CONFIG?.progress?.studentId || "default";
+  const now = new Date().toISOString();
+  const newEntry = {
+    ...entry,
+    id: entry.id || "log_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  if (state.db && state.firebaseConnected) {
+    try {
+      const docRef = await state.db.collection("students").doc(studentId).collection("logs").add({
+        ...newEntry,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      newEntry.id = docRef.id;
+    } catch (err) {
+      console.warn("Failed to write to Firebase, saving locally:", err);
+    }
+  }
+
+  const exists = state.logs.findIndex((l) => l.id === newEntry.id);
+  if (exists >= 0) {
+    state.logs[exists] = newEntry;
+  } else {
+    state.logs.unshift(newEntry);
+  }
+  persistLogs();
+  renderLogs();
+}
+
+async function toggleLogStatus(id) {
+  const studentId = CONFIG?.progress?.studentId || "default";
+  const item = state.logs.find((l) => l.id === id);
+  if (!item) return;
+
+  const nextStatus = item.status === "mastered" ? "needs_review" : "mastered";
+  item.status = nextStatus;
+  item.updatedAt = new Date().toISOString();
+
+  if (state.db && state.firebaseConnected) {
+    try {
+      await state.db.collection("students").doc(studentId).collection("logs").doc(id).update({
+        status: nextStatus,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn("Failed to update status in Firebase:", err);
+    }
+  }
+
+  persistLogs();
+  renderLogs();
+}
+
+async function deleteLogEntry(id) {
+  const studentId = CONFIG?.progress?.studentId || "default";
+  if (state.db && state.firebaseConnected) {
+    try {
+      await state.db.collection("students").doc(studentId).collection("logs").doc(id).delete();
+    } catch (err) {
+      console.warn("Failed to delete log in Firebase:", err);
+    }
+  }
+
+  state.logs = state.logs.filter((l) => l.id !== id);
+  persistLogs();
+  renderLogs();
+}
+
+function renderLogs() {
+  if (!el.logsTab) return;
+  el.logsTab.innerHTML = "";
+
+  const container = document.createElement("div");
+  container.className = "tab-panel";
+
+  // Top Metrics Banner
+  const totalLogs = state.logs.length;
+  const needsReviewCount = state.logs.filter((l) => l.status !== "mastered").length;
+  const masteredCount = state.logs.filter((l) => l.status === "mastered").length;
+  const masteredPct = totalLogs ? Math.round((masteredCount / totalLogs) * 100) : 0;
+
+  const topCard = document.createElement("div");
+  topCard.className = "card";
+
+  const topHeader = document.createElement("div");
+  topHeader.className = "card-header-row";
+
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = "Error Log & Study Vault";
+  const sub = document.createElement("p");
+  sub.className = "note-line";
+  sub.textContent = "Log questions missed during DPPs, tests, and night sprints to review before sleep.";
+  titleWrap.append(title, sub);
+
+  const rightActions = document.createElement("div");
+  rightActions.className = "controls";
+
+  const fbBadge = document.createElement("span");
+  fbBadge.className = "badge";
+  if (state.firebaseConnected) {
+    fbBadge.style.background = "#ecfdf5";
+    fbBadge.style.borderColor = "#a7f3d0";
+    fbBadge.style.color = "#047857";
+    fbBadge.textContent = "🟢 Firebase Real-Time Synced";
+  } else {
+    fbBadge.style.background = "#f1f5f9";
+    fbBadge.style.borderColor = "#cbd5e1";
+    fbBadge.style.color = "#475569";
+    fbBadge.textContent = "💾 Local Storage Mode";
+  }
+
+  const toggleFormBtn = document.createElement("button");
+  toggleFormBtn.className = "btn btn-primary";
+  toggleFormBtn.style.marginTop = "0";
+  toggleFormBtn.textContent = state.logsFilter.showForm ? "✕ Close Form" : "+ Log Mistake";
+  toggleFormBtn.addEventListener("click", () => {
+    state.logsFilter.showForm = !state.logsFilter.showForm;
+    renderLogs();
+  });
+
+  rightActions.append(fbBadge, toggleFormBtn);
+  topHeader.append(titleWrap, rightActions);
+  topCard.appendChild(topHeader);
+
+  // Metrics KPI ribbon
+  const metricsRibbon = document.createElement("div");
+  metricsRibbon.className = "hero-stats";
+  metricsRibbon.style.marginTop = "14px";
+  metricsRibbon.innerHTML = `
+    <div class="stat-card">
+      <p>Total Logged</p>
+      <h3>${totalLogs}</h3>
+    </div>
+    <div class="stat-card">
+      <p>Needs Review</p>
+      <h3 style="color: #d97706;">${needsReviewCount}</h3>
+    </div>
+    <div class="stat-card">
+      <p>Mastered Rate</p>
+      <h3 style="color: #059669;">${masteredPct}% (${masteredCount})</h3>
+    </div>
+  `;
+  topCard.appendChild(metricsRibbon);
+
+  // Accordion New Log Entry Form
+  if (state.logsFilter.showForm) {
+    const formCard = document.createElement("div");
+    formCard.className = "card";
+    formCard.style.marginTop = "16px";
+    formCard.style.border = "1px solid #bfdbfe";
+    formCard.style.background = "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)";
+
+    const formTitle = document.createElement("h4");
+    formTitle.textContent = "📝 Log a Missed Question / Mistake";
+    formCard.appendChild(formTitle);
+
+    const form = document.createElement("form");
+    form.className = "log-form";
+    form.innerHTML = `
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="label" style="color: var(--ink);">Date</label>
+          <input type="date" id="logDate" value="${todayInTZ(CONFIG.timezone)}" required />
+        </div>
+        <div class="form-group">
+          <label class="label" style="color: var(--ink);">Section</label>
+          <select id="logSection">
+            <option value="Quant">Quant</option>
+            <option value="VARC (CR)">VARC (Critical Reasoning)</option>
+            <option value="VARC (RC)">VARC (Reading Comprehension)</option>
+            <option value="Data Insights">Data Insights (DI)</option>
+            <option value="Practice Test">Practice Test / Mock</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label" style="color: var(--ink);">Topic / Question Reference</label>
+          <input type="text" id="logTopic" placeholder="e.g. Algebra DPP 01 - Q14 (Inequalities)" required />
+        </div>
+        <div class="form-group">
+          <label class="label" style="color: var(--ink);">Root Cause</label>
+          <select id="logRootCause">
+            <option value="Concept Gap">💡 Concept Gap (Rule unknown)</option>
+            <option value="Trap Missed">⚠️ Trap / Constraint Missed</option>
+            <option value="Calculation / Speed">⏱️ Calculation / Speed Rush</option>
+            <option value="Misread Question">👁️ Misread Question / Stem</option>
+            <option value="Time Pressure">⏳ Time Pressure / Guess</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top: 10px;">
+        <label class="label" style="color: var(--ink);">Mistake Breakdown / What went wrong?</label>
+        <textarea id="logNote" rows="2" placeholder="e.g. Forgot that dividing by a negative number flips the inequality sign..."></textarea>
+      </div>
+      <div class="form-group" style="margin-top: 10px;">
+        <label class="label" style="color: var(--ink);">🌟 1-Line Golden Rule (To review before sleep)</label>
+        <input type="text" id="logGoldenRule" placeholder="e.g. Always check sign flip when dividing by variables!" required />
+      </div>
+      <div style="display: flex; gap: 10px; margin-top: 14px;">
+        <button type="submit" class="btn btn-primary">Save to Error Vault</button>
+        <button type="button" id="cancelLogBtn" class="btn" style="background: #e2e8f0; color: #334155;">Cancel</button>
+      </div>
+    `;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const date = form.querySelector("#logDate").value;
+      const section = form.querySelector("#logSection").value;
+      const topic = form.querySelector("#logTopic").value.trim();
+      const rootCause = form.querySelector("#logRootCause").value;
+      const note = form.querySelector("#logNote").value.trim();
+      const goldenRule = form.querySelector("#logGoldenRule").value.trim();
+
+      await addLogEntry({
+        date,
+        section,
+        topic,
+        rootCause,
+        note,
+        goldenRule,
+        status: "needs_review",
+      });
+
+      state.logsFilter.showForm = false;
+      renderLogs();
+    });
+
+    form.querySelector("#cancelLogBtn").addEventListener("click", () => {
+      state.logsFilter.showForm = false;
+      renderLogs();
+    });
+
+    formCard.appendChild(form);
+    topCard.appendChild(formCard);
+  }
+
+  container.appendChild(topCard);
+
+  // Filters & Search Card
+  const filterCard = document.createElement("div");
+  filterCard.className = "card";
+
+  const filterControls = document.createElement("div");
+  filterControls.className = "controls";
+
+  const searchInput = document.createElement("input");
+  searchInput.placeholder = "Search topics, mistakes, or golden rules...";
+  searchInput.value = state.logsFilter.search;
+
+  const sectionSelect = document.createElement("select");
+  ["All", "Quant", "VARC (CR)", "VARC (RC)", "Data Insights", "Practice Test"].forEach((sec) => {
+    const opt = document.createElement("option");
+    opt.value = sec;
+    opt.textContent = sec === "All" ? "All Sections" : sec;
+    if (state.logsFilter.section === sec) opt.selected = true;
+    sectionSelect.appendChild(opt);
+  });
+
+  const rootCauseSelect = document.createElement("select");
+  ["All", "Concept Gap", "Trap Missed", "Calculation / Speed", "Misread Question", "Time Pressure"].forEach((rc) => {
+    const opt = document.createElement("option");
+    opt.value = rc;
+    opt.textContent = rc === "All" ? "All Root Causes" : rc;
+    if (state.logsFilter.rootCause === rc) opt.selected = true;
+    rootCauseSelect.appendChild(opt);
+  });
+
+  const statusSelect = document.createElement("select");
+  [
+    { val: "All", label: "All Status" },
+    { val: "needs_review", label: "🟡 Needs Review" },
+    { val: "mastered", label: "🟢 Mastered" },
+  ].forEach((st) => {
+    const opt = document.createElement("option");
+    opt.value = st.val;
+    opt.textContent = st.label;
+    if (state.logsFilter.status === st.val) opt.selected = true;
+    statusSelect.appendChild(opt);
+  });
+
+  filterControls.append(searchInput, sectionSelect, rootCauseSelect, statusSelect);
+  filterCard.appendChild(filterControls);
+
+  // Filtered List
+  const logsList = document.createElement("div");
+  logsList.className = "task-list";
+  logsList.style.marginTop = "12px";
+
+  const renderLogItems = () => {
+    logsList.innerHTML = "";
+    const q = normalize(searchInput.value);
+    const sec = sectionSelect.value;
+    const rc = rootCauseSelect.value;
+    const st = statusSelect.value;
+
+    const filtered = state.logs.filter((item) => {
+      if (sec !== "All" && item.section !== sec) return false;
+      if (rc !== "All" && item.rootCause !== rc) return false;
+      if (st !== "All" && item.status !== st) return false;
+      if (q) {
+        const text = normalize(`${item.topic} ${item.note || ""} ${item.goldenRule || ""} ${item.section} ${item.rootCause}`);
+        if (!text.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (!filtered.length) {
+      const emptyBox = document.createElement("div");
+      emptyBox.style.padding = "30px 20px";
+      emptyBox.style.textAlign = "center";
+      emptyBox.style.color = "var(--muted)";
+      emptyBox.innerHTML = `
+        <p style="font-size: 1.05rem; margin: 0; font-weight: 600;">No error log entries match your filter.</p>
+        <p style="font-size: 0.85rem; margin: 6px 0 0;">Click <strong>+ Log Mistake</strong> above to record missed questions from your night DPP.</p>
+      `;
+      logsList.appendChild(emptyBox);
+      return;
+    }
+
+    filtered.forEach((log) => {
+      const card = document.createElement("div");
+      card.className = "task-item";
+      card.style.display = "block";
+      card.style.padding = "14px 16px";
+      if (log.status === "mastered") {
+        card.classList.add("done");
+      }
+
+      const headerRow = document.createElement("div");
+      headerRow.style.display = "flex";
+      headerRow.style.justifyContent = "space-between";
+      headerRow.style.alignItems = "center";
+      headerRow.style.flexWrap = "wrap";
+      headerRow.style.gap = "8px";
+      headerRow.style.marginBottom = "8px";
+
+      const badgeGroup = document.createElement("div");
+      badgeGroup.style.display = "flex";
+      badgeGroup.style.alignItems = "center";
+      badgeGroup.style.gap = "6px";
+
+      const secBadge = document.createElement("span");
+      secBadge.className = "badge";
+      secBadge.textContent = log.section || "Quant";
+
+      const rcBadge = document.createElement("span");
+      rcBadge.className = "badge";
+      rcBadge.style.background = "#fff7ed";
+      rcBadge.style.borderColor = "#fed7aa";
+      rcBadge.style.color = "#c2410c";
+      rcBadge.textContent = log.rootCause || "Mistake";
+
+      const dateText = document.createElement("span");
+      dateText.style.fontSize = "0.78rem";
+      dateText.style.color = "var(--muted)";
+      dateText.textContent = log.date || "";
+
+      badgeGroup.append(secBadge, rcBadge, dateText);
+
+      const statusToggle = document.createElement("button");
+      statusToggle.className = "btn";
+      statusToggle.style.marginTop = "0";
+      statusToggle.style.padding = "4px 10px";
+      statusToggle.style.fontSize = "0.75rem";
+      if (log.status === "mastered") {
+        statusToggle.style.background = "#dcfce7";
+        statusToggle.style.color = "#15803d";
+        statusToggle.textContent = "✓ Mastered";
+      } else {
+        statusToggle.style.background = "#fef3c7";
+        statusToggle.style.color = "#b45309";
+        statusToggle.textContent = "🟡 Needs Review";
+      }
+      statusToggle.addEventListener("click", () => toggleLogStatus(log.id));
+
+      headerRow.append(badgeGroup, statusToggle);
+      card.appendChild(headerRow);
+
+      const topicHeading = document.createElement("h4");
+      topicHeading.style.margin = "0 0 6px";
+      topicHeading.style.fontSize = "0.98rem";
+      topicHeading.textContent = log.topic;
+      card.appendChild(topicHeading);
+
+      if (log.note) {
+        const noteP = document.createElement("p");
+        noteP.style.margin = "0 0 8px";
+        noteP.style.fontSize = "0.86rem";
+        noteP.style.color = "var(--muted)";
+        noteP.textContent = log.note;
+        card.appendChild(noteP);
+      }
+
+      if (log.goldenRule) {
+        const goldenBox = document.createElement("div");
+        goldenBox.style.padding = "8px 12px";
+        goldenBox.style.background = "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)";
+        goldenBox.style.border = "1px solid #fde68a";
+        goldenBox.style.borderRadius = "8px";
+        goldenBox.style.fontSize = "0.84rem";
+        goldenBox.style.fontWeight = "600";
+        goldenBox.style.color = "#92400e";
+        goldenBox.innerHTML = `🌟 Golden Rule: <span>${log.goldenRule}</span>`;
+        card.appendChild(goldenBox);
+      }
+
+      const footerRow = document.createElement("div");
+      footerRow.style.display = "flex";
+      footerRow.style.justifyContent = "flex-end";
+      footerRow.style.marginTop = "8px";
+
+      const delBtn = document.createElement("button");
+      delBtn.style.background = "transparent";
+      delBtn.style.border = "none";
+      delBtn.style.color = "#ef4444";
+      delBtn.style.fontSize = "0.78rem";
+      delBtn.style.cursor = "pointer";
+      delBtn.style.padding = "2px 6px";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", () => {
+        if (confirm("Delete this error log entry?")) {
+          deleteLogEntry(log.id);
+        }
+      });
+      footerRow.appendChild(delBtn);
+      card.appendChild(footerRow);
+
+      logsList.appendChild(card);
+    });
+  };
+
+  searchInput.addEventListener("input", renderLogItems);
+  sectionSelect.addEventListener("change", renderLogItems);
+  rootCauseSelect.addEventListener("change", renderLogItems);
+  statusSelect.addEventListener("change", renderLogItems);
+  renderLogItems();
+
+  filterCard.appendChild(logsList);
+  container.appendChild(filterCard);
+  el.logsTab.appendChild(container);
+}
+
 function refreshAllViews() {
   renderToday();
   renderPlanner();
+  renderLogs();
   renderLibrary();
   updateStats();
 }
@@ -776,6 +1290,8 @@ async function init() {
   }
   await syncDrive();
   await initProgressSync();
+  await initFirebase();
+  renderLogs();
 }
 
 init();
